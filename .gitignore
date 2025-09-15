@@ -1,0 +1,9 @@
+**__pycache__/
+devlogs.txt
+test.ipynb
+.pytest_cache/
+htmlcov/
+.coverage
+dist/
+.env
+.github/workflows/publish-github.yml
