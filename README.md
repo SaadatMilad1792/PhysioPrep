@@ -1,7 +1,7 @@
 ![Python](https://img.shields.io/badge/python-3.10-2ca02c?style=flat&labelColor=2f2f4f)
 [![License: MIT](https://img.shields.io/badge/license-MIT-1f77b4?style=flat&labelColor=2f2f4f)](./LICENSE)
 [![PyPI](https://img.shields.io/pypi/v/physioprep?style=flat&labelColor=2f2f4f&color=9467bd&logo=pypi)](https://pypi.org/project/physioprep/)
-[![TestPyPI](https://img.shields.io/badge/dynamic/json?url=https://test.pypi.org/pypi/physioprep/json&query=info.version&label=TestPyPI&style=flat&labelColor=2f2f4f&color=9467bd&logo=pypi)](https://test.pypi.org/project/physioprep/)
+[![TestPyPI](https://img.shields.io/badge/dynamic/json?url=https://test.pypi.org/pypi/physioprep/json&query=info.version&label=TestPyPI&style=flat&labelColor=2f2f4f&color=9467bd&logo=pypi&prefix=v)](https://test.pypi.org/project/physioprep/)
 [![Codecov](https://codecov.io/gh/SaadatMilad1792/physioprep/branch/master/graph/badge.svg)](https://codecov.io/gh/SaadatMilad1792/physioprep)
 
 ![physioprep logo](docs/images/physioprep_logo.png)
