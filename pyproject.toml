@@ -1,6 +1,5 @@
 [project]
 name = "physioprep"
-version = "0.0.1"
 description = ""
 authors = [
     {name = "Your Name",email = "you@example.com"}
