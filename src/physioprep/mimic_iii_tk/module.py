@@ -19,13 +19,25 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 class M3WaveFormMasterClass():
   def __init__(self) -> None:
     super(M3WaveFormMasterClass, self).__init__()
-    # self.validation = M3ValidationMasterClass()
+    self.preset_metadata = self.get_preset()
 
+    # self.validation = M3ValidationMasterClass()
     self.args = {
       "dat_cache_dir": pooch.os_cache('wfdb'),
       "physionet_url": "https://physionet.org/files/",
       "physionet_dir": "mimic3wdb-matched/1.0/",
     }
+
+  ## -- get all the available signals -- ##
+  def get_available_signals(self, forbidden: list[str] = ['???', '[5125]', '!', '[0]']) -> list[str]:
+    unique_signals = self.preset_metadata["signals"].explode().dropna().unique()
+    return [s for s in unique_signals if s not in forbidden]
+  
+  ## -- get preset metadata -- ##
+  def get_preset(self):
+    with resources.open_binary("physioprep.mimic_iii_tk.data", "preset.pkl.gz") as file:
+      preset_metadata = pd.read_pickle(file, compression = "gzip")
+    return preset_metadata.reset_index(drop = True)
 
   ## -- get the list of patients from preset .pkl or from physionet -- ##
   def get_patients(self) -> list[str]:
@@ -47,8 +59,8 @@ class M3WaveFormMasterClass():
     return records
   
   ## -- get patient record as a header -- ##
-  def get_patient_header(self, patient_group_id: str, record: str) -> wfdb.Record:
-    pn_dir = f"{self.args['physionet_dir']}{patient_group_id}"
+  def get_patient_header(self, group: str, pid: str, record: str) -> wfdb.Record:
+    pn_dir = f"{self.args['physionet_dir']}{group}/{pid}/"
     header = wfdb.rdheader(record, pn_dir = pn_dir)
     return header
   
@@ -76,7 +88,8 @@ class M3WaveFormMasterClass():
 
   ## -- get signals existing within a specific segment -- ##
   def get_signals_within(self, patient_group_id: str, record_segment: str) -> list:
-    header = self.get_patient_header(patient_group_id, record_segment)
+    group, pid = self.get_patient_group_id(patient_group_id)
+    header = self.get_patient_header(group, pid, record_segment)
     return list(header.sig_name)
   
   ## -- create the preset lookup table -- ##
@@ -149,59 +162,49 @@ class M3WaveFormMasterClass():
       return df
     return pd.DataFrame()
 
-
-
-
-  # ## -- get all the available signals -- ##
-  # def get_available_signals(self) -> list[str]:
-  #   forbidden = ['???']
-  #   unique_signals = self.args_preset["patients_list"]["patient_signals"].explode().dropna().unique()
-  #   return [s for s in unique_signals if s not in forbidden]
-
-  # ## -- get patients that have the listed signals available -- ##
-  # def get_patient_with_signal(self, patients: list[str] | None = None, 
-  #                             signal_filter: list[str] | None = None) -> pd.DataFrame:
+  ## -- get patients that have the listed signals available -- ##
+  def get_patient_with_signal(self, df: pd.DataFrame, inp_channels: list[str] | None = None,
+                              inp_type: str = 'any', out_channels: list[str] | None = None,
+                              out_type: str = 'any', min_samples: int | None = None) -> pd.DataFrame:
     
-  #   df = self.args_preset["patients_list"].copy()
-  #   patients = patients if patients is not None else list(df["patient_id"])
-  #   df = df[df["patient_id"].isin(patients)]
-  #   if signal_filter is not None:
-  #     df = df[df["patient_signals"].apply(lambda sig: set(signal_filter).issubset(sig))]
-  #   return df
-
-  # ## -- get patient record as a dataset -- ##
-  # def get_patient_record(self, group: str, pid: str, record: str, sampfrom: int = 0, 
-  #                        sampto: int | None = None, channels: list[int] | None = None) -> wfdb.Record:
-
-  #   df = self.args_preset["patients_list"].copy()
-  #   available_channels = df[(df["patient_id"] == pid) & (df["patient_record"] == record)].iloc[0]
-  #   channels = channels if channels is not None else available_channels["patient_signals"]
-  #   channels = [available_channels["patient_signals"].index(item) for item in channels]
-  #   pn_dir = self.args_preset["physionet_dir"] + group + "/" + pid
-  #   rec = wfdb.rdrecord(record, pn_dir = pn_dir, sampfrom = sampfrom, sampto = sampto, channels = channels)
-  #   return rec
-
-  # ## -- selects a random batch from the data -- ##
-  # def get_data_batch(self, df: pd.DataFrame, batch_size: int, signal_len: int, 
-  #                    channels: list[str] | None = None, timeout: int = 100) -> np.array:
-
-  #   batch, timeout_counter = [], 0
-  #   timeout = max(batch_size, timeout)
-  #   while len(batch) < batch_size and timeout_counter <= timeout:
-  #     timeout_counter += 1
-  #     # timeout_counter += 1 if len(batch) > 0 else 0
-  #     rand_row = df.sample(n = 1).iloc[0]
-  #     group, pid, record = rand_row["patient_group"], rand_row["patient_id"], rand_row["patient_record"]
-
-  #     try:
-  #       header = self.get_patient_header(group, pid, record)
-  #       random_offset = np.random.randint(0, max(0, header.sig_len - signal_len) + 1)
-  #       sampfrom, sampto = random_offset, random_offset + signal_len
-  #       rec = self.get_patient_record(group, pid, record, sampfrom = sampfrom, sampto = sampto, channels = channels)
-  #       waveform, val_flag = rec.p_signal, self.validation.apply(rec.p_signal, signal_len)
-  #       batch.append(waveform.transpose(1, 0)) if val_flag else None
-  #       # print(rec.p_signal.shape, header.fs, rec.sig_name)
-  #     except:
-  #       continue
+    tmp_df = df[df["segment_len"] >= min_samples] if min_samples is not None else df
+    tmp_df = filter_patient_waveforms(tmp_df, inp_channels, inp_type) if inp_channels is not None else tmp_df
+    tmp_df = filter_patient_waveforms(tmp_df, out_channels, out_type) if out_channels is not None else tmp_df
+    return tmp_df
     
-  #   return np.stack(batch) if len(batch) > 0 else False
+  ## -- get patient record as a dataset -- ##
+  def get_patient_record(self, group: str, pid: str, record_segment: str, sampfrom: int = 0, sampto: int | None = None, 
+                         sample_res: int = 64, channels: list[int] | None = None) -> wfdb.Record:
+
+    df = self.preset_metadata.copy()
+    available_channels = df[(df["patient_id"] == pid) & (df["segment"] == record_segment)].iloc[0]
+    channels = channels if channels is not None else available_channels["signals"]
+    channels = [available_channels["signals"].index(item) for item in channels]
+    pn_dir = self.args["physionet_dir"] + group + "/" + pid
+    rec = wfdb.rdrecord(record_segment, pn_dir = pn_dir, sampfrom = sampfrom, 
+                        sampto = sampto, return_res = sample_res, channels = channels)
+    return rec
+
+  ## -- selects a random batch from the data -- ##
+  def get_data_batch(self, df: pd.DataFrame, batch_size: int, seq_len: int, 
+                     channels: list[str] | None = None, sample_res: int = 64) -> np.array:
+    batch, batch_channels, batch_masks = [], [], []
+    rand_row = df.sample(n = batch_size)
+    for batch_idx in range(batch_size):
+      row = rand_row.iloc[batch_idx]
+      header = self.get_patient_header(row["patient_group"], row["patient_id"], row["segment"])
+      random_offset = np.random.randint(0, max(0, header.sig_len - seq_len) + 1)
+      sampfrom, sampto = random_offset, random_offset + seq_len
+      masked_channels = np.array([False if sig in row["signals"] else True for sig in channels]).astype(bool)
+      shared_channels = [sig for sig in channels if sig in row["signals"]]
+      rec = self.get_patient_record(row["patient_group"], row["patient_id"], row["segment"], sampfrom = sampfrom, 
+                                    sampto = sampto, sample_res = sample_res, channels = shared_channels)
+      # waveform, val_flag = rec.p_signal, self.validation.apply(rec.p_signal, seq_len)
+      waveform = rec.p_signal
+      masked_waveform = np.zeros((waveform.shape[0], len(masked_channels)))
+      masked_waveform[:, ~masked_channels] = waveform[:, :np.sum(~masked_channels)]
+      batch.append(masked_waveform.transpose(1, 0)) # if val_flag else None
+      batch_channels.append(shared_channels)
+      batch_masks.append(masked_channels)
+
+    return np.stack(batch), batch_channels, batch_masks

@@ -11,16 +11,18 @@ import pandas as pd
 ########################################################################################################################
 
 ## -- splits dataframe into smaller independent dataframes -- ##
-def get_subject_split(df: pd.DataFrame, split_ratio: list[int] = [1.0], 
+def get_subject_split(df: pd.DataFrame, split_ratio: list[int] = [1.0],
                       seed: int | None = None) -> list[pd.DataFrame]:
+  split_ratio = np.array(split_ratio, dtype=float)
+  split_ratio = split_ratio / split_ratio.sum()
+  patients = df["patient_id"].unique()
+  rng = np.random.default_rng(seed)
+  rng.shuffle(patients)
 
-  split_ratio = np.array(split_ratio)
-  split_ratio = split_ratio / np.sum(split_ratio)
-  df = df.sample(frac = 1, random_state = seed).reset_index(drop = True)
-  slices = list(np.cumsum(len(df) * split_ratio).astype(int))
-  
-  slices = [None] + slices
-  df_split = [df[slices[i]:slices[i + 1]] for i in range(len(slices) - 1)]
+  slices = np.cumsum(len(patients) * split_ratio).astype(int)
+  slices = [None] + slices.tolist()
+  patient_groups = [patients[slices[i]:slices[i + 1]] for i in range(len(slices) - 1)]
+  df_split = [df[df["patient_id"].isin(group)].reset_index(drop = True) for group in patient_groups]
   return df_split
 
 ## -- custom waveform selection tool -- ##

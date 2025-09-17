@@ -11,6 +11,12 @@ import physioprep as pp
 ## -- tests for physioprep/mimic_iii_tk/module.py -- ###################################################################
 ########################################################################################################################
 
+## -- tests for preset metadata data frame -- ##
+def test_get_preset_returns_dataframe():
+  module = pp.M3WaveFormMasterClass()
+  result = module.get_preset()
+  assert isinstance(result, pd.DataFrame)
+
 ## -- tests for get patients -- ##
 def test_get_patients():
   obj = pp.M3WaveFormMasterClass()
@@ -75,7 +81,8 @@ def test_get_patient_header():
   record = "p123456-1234-12-12-12-12"
   mock_header = MagicMock(spec = wfdb.Record)
   with patch("wfdb.rdheader", return_value = mock_header) as mock_rdheader:
-    header = obj.get_patient_header(patient_group_id = patient_group_id, record = record)
+    group, pid = obj.get_patient_group_id(patient_group_id)
+    header = obj.get_patient_header(group = group, pid = pid, record = record)
 
   mock_rdheader.assert_called_once_with(record, pn_dir = "data/groupA/pid123/")
   assert header is mock_header
@@ -140,7 +147,8 @@ def test_get_signals_within():
   mock_header.sig_name = ["ECG", "PPG", "RESP"]
   obj.get_patient_header = MagicMock(return_value = mock_header)
   signals = obj.get_signals_within(patient_group_id = patient_group_id, record_segment = record_segment)
-  obj.get_patient_header.assert_called_once_with(patient_group_id, record_segment)
+  group, pid = obj.get_patient_group_id(patient_group_id)
+  obj.get_patient_header.assert_called_once_with(group, pid, record_segment)
   assert isinstance(signals, list)
   assert signals == ["ECG", "PPG", "RESP"]
   assert all(isinstance(s, str) for s in signals)
@@ -230,3 +238,41 @@ def test_create_preset_lookup_threaded_exceptions(capsys):
   captured = capsys.readouterr()
   assert "Failed to process patient bad_patient: fail_records" in captured.out
 
+## -- tests for advanced builtin filter -- ##
+def test_get_patient_with_signal_filters_min_samples(monkeypatch):
+  module = pp.M3WaveFormMasterClass()
+  df = module.preset_metadata
+  inp_channels, out_channels = ["II", "PLETH"], ["ABP"]
+  df = module.get_patient_with_signal(df, inp_channels = inp_channels, inp_type = "any",
+                                      out_channels = out_channels, out_type = "all", min_samples = 20000)
+  
+  assert df.iloc[0]["segment_len"] >= 20000
+
+## -- tests for get all available signals -- ##
+def test_get_available_signals():
+  module = pp.M3WaveFormMasterClass()
+  available_signals = module.get_available_signals()
+  assert set(["II", "ABP", "PLETH"]).issubset(available_signals)
+
+## -- tests for get patient record -- ##
+def test_get_patient_record():
+  module = pp.M3WaveFormMasterClass()
+  rec = module.get_patient_record(group = "p00", pid = "p000020", record_segment = "3544749_0005", 
+                                  sampfrom = 10000, sampto = 10125, channels = ['II', 'ABP'])
+  
+  assert len(rec.p_signal[0]) == 2
+  assert len(rec.p_signal[:, 0]) == 125
+
+## -- tests for get data batch -- ##
+def test_get_data_batch():
+  module = pp.M3WaveFormMasterClass()
+  df = module.preset_metadata
+  inp_channels, out_channels = ["II", "PLETH"], ["ABP"]
+  df = module.get_patient_with_signal(df, inp_channels = inp_channels, inp_type = "any",
+                                      out_channels = out_channels, out_type = "all", min_samples = 20000)
+  tr, va, te = pp.get_subject_split(df, [0.8, 0.1, 0.1])
+  batch, channels, masks = module.get_data_batch(df, batch_size = 1, seq_len = 125, channels = inp_channels + out_channels, sample_res = 32)
+  assert batch.shape[0] == 1
+  assert batch.shape[-1] == 125
+  assert len(channels) == 1
+  assert len(masks) == 1
