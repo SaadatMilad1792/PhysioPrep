@@ -1,6 +1,6 @@
 [project]
 name = "physioprep"
-version = "0.0.1"
+version = "0.0.1b3"
 description = ""
 authors = [
     {name = "Your Name",email = "you@example.com"}
@@ -20,13 +20,9 @@ dependencies = [
 [tool.poetry]
 packages = [{include = "physioprep", from = "src"}]
 
-[tool.poetry.plugins."poetry-dynamic-versioning"]
-enable = "true"
-
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.2"
 pytest-cov = "^7.0.0"
-poetry-dynamic-versioning = "^1.9.1"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

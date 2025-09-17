@@ -187,24 +187,31 @@ class M3WaveFormMasterClass():
 
   ## -- selects a random batch from the data -- ##
   def get_data_batch(self, df: pd.DataFrame, batch_size: int, seq_len: int, 
-                     channels: list[str] | None = None, sample_res: int = 64) -> np.array:
-    batch, batch_channels, batch_masks = [], [], []
-    rand_row = df.sample(n = batch_size)
-    for batch_idx in range(batch_size):
-      row = rand_row.iloc[batch_idx]
+                   channels: list[str] | None = None, sample_res: int = 64,
+                   num_cores: int | None = None) -> tuple[np.ndarray, list, list]:
+
+    def process_row(row):
       header = self.get_patient_header(row["patient_group"], row["patient_id"], row["segment"])
       random_offset = np.random.randint(0, max(0, header.sig_len - seq_len) + 1)
       sampfrom, sampto = random_offset, random_offset + seq_len
       masked_channels = np.array([False if sig in row["signals"] else True for sig in channels]).astype(bool)
       shared_channels = [sig for sig in channels if sig in row["signals"]]
-      rec = self.get_patient_record(row["patient_group"], row["patient_id"], row["segment"], sampfrom = sampfrom, 
-                                    sampto = sampto, sample_res = sample_res, channels = shared_channels)
-      # waveform, val_flag = rec.p_signal, self.validation.apply(rec.p_signal, seq_len)
+      rec = self.get_patient_record(
+        row["patient_group"], row["patient_id"], row["segment"],
+        sampfrom = sampfrom, sampto = sampto, sample_res = sample_res, channels = shared_channels
+      )
       waveform = rec.p_signal
       masked_waveform = np.zeros((waveform.shape[0], len(masked_channels)))
       masked_waveform[:, ~masked_channels] = waveform[:, :np.sum(~masked_channels)]
-      batch.append(masked_waveform.transpose(1, 0)) # if val_flag else None
-      batch_channels.append(shared_channels)
-      batch_masks.append(masked_channels)
+      return masked_waveform.transpose(1, 0), shared_channels, masked_channels
 
-    return np.stack(batch), batch_channels, batch_masks
+    rand_rows = df.sample(n = batch_size)
+
+    if num_cores is None or num_cores == 1:
+      results = [process_row(rand_rows.iloc[i]) for i in range(batch_size)]
+    else:
+      with ThreadPoolExecutor(max_workers = num_cores) as executor:
+        results = list(executor.map(process_row, [rand_rows.iloc[i] for i in range(batch_size)]))
+
+    batch, batch_channels, batch_masks = zip(*results)
+    return np.stack(batch), list(batch_channels), list(batch_masks)

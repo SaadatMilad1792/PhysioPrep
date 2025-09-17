@@ -276,3 +276,12 @@ def test_get_data_batch():
   assert batch.shape[-1] == 125
   assert len(channels) == 1
   assert len(masks) == 1
+
+  df = module.get_patient_with_signal(df, inp_channels = inp_channels, inp_type = "any",
+                                      out_channels = out_channels, out_type = "all", min_samples = 20000)
+  tr, va, te = pp.get_subject_split(df, [0.8, 0.1, 0.1])
+  batch, channels, masks = module.get_data_batch(df, batch_size = 1, seq_len = 125, channels = inp_channels + out_channels, sample_res = 32, num_cores = 2)
+  assert batch.shape[0] == 1
+  assert batch.shape[-1] == 125
+  assert len(channels) == 1
+  assert len(masks) == 1
