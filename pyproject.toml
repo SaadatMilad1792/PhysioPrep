@@ -1,11 +1,12 @@
 [project]
 name = "physioprep"
+version = "0.0.1"
 description = ""
 authors = [
     {name = "Your Name",email = "you@example.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<4.0"
 dependencies = [
     "numpy (<2.0)",
     "pandas (>=2.3.2,<3.0.0)",
@@ -25,6 +26,7 @@ enable = "true"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.2"
 pytest-cov = "^7.0.0"
+poetry-dynamic-versioning = "^1.9.1"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
