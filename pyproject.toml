@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [tool.poetry]
-version = "0.0.1b3"
+version = "0.0.1c0"
 packages = [{include = "physioprep", from = "src"}]
 
 [tool.poetry.group.dev.dependencies]
