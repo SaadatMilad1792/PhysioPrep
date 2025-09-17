@@ -1,6 +1,5 @@
 [project]
 name = "physioprep"
-version = "0.0.1b3"
 description = ""
 authors = [
     {name = "Your Name",email = "you@example.com"}
@@ -18,6 +17,7 @@ dependencies = [
 ]
 
 [tool.poetry]
+version = "0.0.1b3"
 packages = [{include = "physioprep", from = "src"}]
 
 [tool.poetry.group.dev.dependencies]
