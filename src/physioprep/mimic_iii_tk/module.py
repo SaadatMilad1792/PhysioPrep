@@ -35,7 +35,7 @@ class M3WaveFormMasterClass():
     return [s for s in unique_signals if s not in forbidden]
   
   ## -- get preset metadata -- ##
-  def get_preset(self):
+  def get_preset(self) -> pd.DataFrame:
     with resources.open_binary("physioprep.mimic_iii_tk.data", "preset.pkl.gz") as file:
       preset_metadata = pd.read_pickle(file, compression = "gzip")
     return preset_metadata.reset_index(drop = True)
@@ -82,27 +82,27 @@ class M3WaveFormMasterClass():
     return record_ids, record_inf
   
   ## -- checks if the alignment is uncertain -- ##
-  def contains_uncertain(self, patient_group_id: str, record_segment: str) -> bool:
+  def contains_certain(self, patient_group_id: str, record_segment: str) -> bool:
     segment_url = f"{self.args['physionet_url']}{self.args['physionet_dir']}{patient_group_id}{record_segment}.hea"
     segment_list = requests.get(segment_url).text.strip().split("\n")
     return not any("uncertain" in s.lower() for s in segment_list)
 
   ## -- get signals existing within a specific segment -- ##
-  def get_signals_within(self, patient_group_id: str, record_segment: str) -> list:
+  def get_signals_within(self, patient_group_id: str, record_segment: str) -> list[str]:
     group, pid = self.get_patient_group_id(patient_group_id)
     header = self.get_patient_header(group, pid, record_segment)
     return list(header.sig_name)
   
   ## -- create the preset lookup table -- ##
   def create_preset_lookup(self, patients: list[str] | None = None, save_as: str | None = None,
-                          tqdm_depth: int = 3, cores: int | None = None) -> pd.DataFrame:
+                           tqdm_depth: int = 3, cores: int | None = None) -> pd.DataFrame:
 
     patients, entry_rows = self.get_patients() if patients is None else patients, []
     tqdm_flag = [True if k < tqdm_depth else False for k in range(3)]
 
     def process_segment(patient, record, segment, segment_len):
       signals = fetch_with_retry(self.get_signals_within, patient, segment)
-      certain = fetch_with_retry(self.contains_uncertain, patient, segment)
+      certain = fetch_with_retry(self.contains_certain, patient, segment)
       group, pid = fetch_with_retry(self.get_patient_group_id, patient)
       return pd.DataFrame({
         "patient_group": [str(group)],
@@ -192,8 +192,12 @@ class M3WaveFormMasterClass():
                      num_cores: int | None = None, timeout: int = 5) -> tuple[np.ndarray, list, list]:
 
     validator = M3WaveFormValidationModule()
-    def process_row(row):
+
+    def process_row(_):
+      # _ is just a placeholder, we will sample inside
       for attempt in range(timeout):
+        row = df.sample(n=1).iloc[0]  # sample a new row each attempt
+
         header = self.get_patient_header(row["patient_group"], row["patient_id"], row["segment"])
         random_offset = np.random.randint(0, max(0, header.sig_len - seq_len) + 1)
         sampfrom, sampto = random_offset, random_offset + seq_len
@@ -203,7 +207,7 @@ class M3WaveFormMasterClass():
 
         rec = self.get_patient_record(
           row["patient_group"], row["patient_id"], row["segment"],
-          sampfrom = sampfrom, sampto = sampto, sample_res = sample_res, channels = shared_channels
+          sampfrom=sampfrom, sampto=sampto, sample_res=sample_res, channels=shared_channels
         )
 
         waveform = rec.p_signal
@@ -215,16 +219,14 @@ class M3WaveFormMasterClass():
         if validator.apply(masked_waveform):
           return masked_waveform, shared_channels, masked_channels
 
-      # if all attempts fail, return None to handle later
+      # if all attempts fail, return None
       return None
 
-    rand_rows = df.sample(n = batch_size)
-
     if num_cores is None or num_cores == 1:
-      results = [process_row(rand_rows.iloc[i]) for i in range(batch_size)]
+      results = [process_row(None) for _ in range(batch_size)]
     else:
-      with ThreadPoolExecutor(max_workers = num_cores) as executor:
-        results = list(executor.map(process_row, [rand_rows.iloc[i] for i in range(batch_size)]))
+      with ThreadPoolExecutor(max_workers=num_cores) as executor:
+        results = list(executor.map(process_row, range(batch_size)))
 
     final_batch, batch_channels_list, batch_masks_list = [], [], []
     for r in results:
@@ -239,6 +241,7 @@ class M3WaveFormMasterClass():
         batch_masks_list.append(r[2])
 
     return np.stack(final_batch), batch_channels_list, batch_masks_list
+
 
 
   # def get_data_batch(self, df: pd.DataFrame, batch_size: int, seq_len: int, 

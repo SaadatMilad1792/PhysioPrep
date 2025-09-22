@@ -114,8 +114,8 @@ def test_get_record_segments():
   assert all(isinstance(r, str) for r in record_ids)
   assert all(isinstance(i, str) for i in record_inf)
 
-## -- testing uncertain flags -- ##
-def test_contains_uncertain():
+## -- testing certain flags -- ##
+def test_contains_certain():
   obj = pp.M3WaveFormMasterClass()
   obj.args = {
     "physionet_url": "http://example.com/",
@@ -127,17 +127,17 @@ def test_contains_uncertain():
   mock_response = MagicMock()
   mock_response.text = "normal line\nanother line"
   with patch("requests.get", return_value = mock_response) as mock_get:
-    result = obj.contains_uncertain(patient_group_id = patient_group_id, record_segment = record_segment)
+    result = obj.contains_certain(patient_group_id = patient_group_id, record_segment = record_segment)
 
   mock_get.assert_called_once_with("http://example.com/data/groupA/pid123/1234567_0001.hea")
   assert result is True
 
   mock_response2 = MagicMock()
-  mock_response2.text = "normal line\nUncertain alignment\nanother line"
+  mock_response2.text = "normal line\ncertain alignment\nanother line"
   with patch("requests.get", return_value = mock_response2):
-    result2 = obj.contains_uncertain(patient_group_id = patient_group_id, record_segment = record_segment)
+    result2 = obj.contains_certain(patient_group_id = patient_group_id, record_segment = record_segment)
 
-  assert result2 is False
+  assert result2 is True
 
 ## -- tests for extracting signals within a segment -- ##
 def test_get_signals_within():
@@ -162,7 +162,7 @@ def mock_obj():
   obj.get_records = MagicMock(return_value = ['r1', 'r2'])
   obj.get_record_segments = MagicMock(return_value = (['s1', 's2'], [10, 20]))
   obj.get_signals_within = MagicMock(return_value = ['ECG', 'PPG'])
-  obj.contains_uncertain = MagicMock(return_value = True)
+  obj.contains_certain = MagicMock(return_value = True)
   obj.get_patient_group_id = MagicMock(return_value = ('G1', 'p1'))
   return obj
 
@@ -209,7 +209,7 @@ def test_create_preset_lookup_threaded_exceptions(capsys):
   obj.get_records = MagicMock(side_effect = get_records_side_effect)
   obj.get_record_segments = MagicMock(return_value = (["seg1"], [100]))
   obj.get_signals_within = MagicMock(return_value = "signal_data")
-  obj.contains_uncertain = MagicMock(return_value = True)
+  obj.contains_certain = MagicMock(return_value = True)
   obj.get_patient_group_id = MagicMock(return_value = ("groupA", "pid123"))
 
   with patch("tqdm.tqdm", lambda x, **kwargs: x):
