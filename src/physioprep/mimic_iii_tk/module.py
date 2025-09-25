@@ -194,9 +194,8 @@ class M3WaveFormMasterClass():
     validator = M3WaveFormValidationModule()
 
     def process_row(_):
-      # _ is just a placeholder, we will sample inside
       for attempt in range(timeout):
-        row = df.sample(n=1).iloc[0]  # sample a new row each attempt
+        row = df.sample(n = 1).iloc[0]
 
         header = self.get_patient_header(row["patient_group"], row["patient_id"], row["segment"])
         random_offset = np.random.randint(0, max(0, header.sig_len - seq_len) + 1)
@@ -215,11 +214,11 @@ class M3WaveFormMasterClass():
         masked_waveform[:, ~masked_channels] = waveform[:, :np.sum(~masked_channels)]
         masked_waveform = masked_waveform.transpose(1, 0)
 
-        # validate
-        if validator.apply(masked_waveform):
+        existing_waveform = masked_waveform[~masked_channels, :]
+        if validator.apply(existing_waveform):
           return masked_waveform, shared_channels, masked_channels
 
-      # if all attempts fail, return None
+
       return None
 
     if num_cores is None or num_cores == 1:
