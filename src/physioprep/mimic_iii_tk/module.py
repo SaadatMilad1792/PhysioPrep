@@ -175,15 +175,29 @@ class M3WaveFormMasterClass():
     
   ## -- get patient record as a dataset -- ##
   def get_patient_record(self, group: str, pid: str, record_segment: str, sampfrom: int = 0, sampto: int | None = None, 
-                         sample_res: int = 64, channels: list[int] | None = None) -> wfdb.Record:
+                       sample_res: int = 64, channels: list[int] | None = None) -> wfdb.Record:
 
     df = self.preset_metadata.copy()
     available_channels = df[(df["patient_id"] == pid) & (df["segment"] == record_segment)].iloc[0]
-    channels = channels if channels is not None else available_channels["signals"]
-    channels = [available_channels["signals"].index(item) for item in channels]
+    all_signals = available_channels["signals"]
+    channels = channels if channels is not None else all_signals
+
+    seen = set()
+    unique_channels = []
+    for ch in channels:
+      if ch not in seen:
+        seen.add(ch)
+        unique_channels.append(ch)
+
+    unique_indices = [all_signals.index(ch) for ch in unique_channels]
     pn_dir = self.args["physionet_dir"] + group + "/" + pid
-    rec = wfdb.rdrecord(record_segment, pn_dir = pn_dir, sampfrom = sampfrom, 
-                        sampto = sampto, return_res = sample_res, channels = channels)
+    rec = wfdb.rdrecord(record_segment, pn_dir = pn_dir, sampfrom=sampfrom, 
+                        sampto = sampto, return_res = sample_res, channels = unique_indices)
+
+    sig_map = {ch: rec.p_signal[:, i] for i, ch in enumerate(unique_channels)}
+    rec.p_signal = np.stack([sig_map[ch] for ch in channels], axis = 1)
+    rec.sig_name = channels
+
     return rec
 
   ## -- selects a random batch from the data -- ##
@@ -206,7 +220,7 @@ class M3WaveFormMasterClass():
 
         rec = self.get_patient_record(
           row["patient_group"], row["patient_id"], row["segment"],
-          sampfrom=sampfrom, sampto=sampto, sample_res=sample_res, channels=shared_channels
+          sampfrom=sampfrom, sampto = sampto, sample_res = sample_res, channels = shared_channels
         )
 
         waveform = rec.p_signal
@@ -218,13 +232,12 @@ class M3WaveFormMasterClass():
         if validator.apply(existing_waveform):
           return masked_waveform, shared_channels, masked_channels
 
-
       return None
 
     if num_cores is None or num_cores == 1:
       results = [process_row(None) for _ in range(batch_size)]
     else:
-      with ThreadPoolExecutor(max_workers=num_cores) as executor:
+      with ThreadPoolExecutor(max_workers = num_cores) as executor:
         results = list(executor.map(process_row, range(batch_size)))
 
     final_batch, batch_channels_list, batch_masks_list = [], [], []
@@ -240,35 +253,3 @@ class M3WaveFormMasterClass():
         batch_masks_list.append(r[2])
 
     return np.stack(final_batch), batch_channels_list, batch_masks_list
-
-
-
-  # def get_data_batch(self, df: pd.DataFrame, batch_size: int, seq_len: int, 
-  #                  channels: list[str] | None = None, sample_res: int = 64,
-  #                  num_cores: int | None = None) -> tuple[np.ndarray, list, list]:
-
-  #   def process_row(row):
-  #     header = self.get_patient_header(row["patient_group"], row["patient_id"], row["segment"])
-  #     random_offset = np.random.randint(0, max(0, header.sig_len - seq_len) + 1)
-  #     sampfrom, sampto = random_offset, random_offset + seq_len
-  #     masked_channels = np.array([False if sig in row["signals"] else True for sig in channels]).astype(bool)
-  #     shared_channels = [sig for sig in channels if sig in row["signals"]]
-  #     rec = self.get_patient_record(
-  #       row["patient_group"], row["patient_id"], row["segment"],
-  #       sampfrom = sampfrom, sampto = sampto, sample_res = sample_res, channels = shared_channels
-  #     )
-  #     waveform = rec.p_signal
-  #     masked_waveform = np.zeros((waveform.shape[0], len(masked_channels)))
-  #     masked_waveform[:, ~masked_channels] = waveform[:, :np.sum(~masked_channels)]
-  #     return masked_waveform.transpose(1, 0), shared_channels, masked_channels
-
-  #   rand_rows = df.sample(n = batch_size)
-
-  #   if num_cores is None or num_cores == 1:
-  #     results = [process_row(rand_rows.iloc[i]) for i in range(batch_size)]
-  #   else:
-  #     with ThreadPoolExecutor(max_workers = num_cores) as executor:
-  #       results = list(executor.map(process_row, [rand_rows.iloc[i] for i in range(batch_size)]))
-
-  #   batch, batch_channels, batch_masks = zip(*results)
-  #   return np.stack(batch), list(batch_channels), list(batch_masks)
