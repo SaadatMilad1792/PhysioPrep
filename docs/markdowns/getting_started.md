@@ -32,6 +32,6 @@ print(physioprep.__version__)
 ```
 
 ## Navigation Panel
-- [Next (Getting Started)](/docs/markdowns/mimic_iii_tk.md)
+- [Next (MIMIC III Toolkit)](/docs/markdowns/mimic_iii_ms_tk.md)
 - [Return to repository](/)
 - [Back (Introduction)](/README.md)

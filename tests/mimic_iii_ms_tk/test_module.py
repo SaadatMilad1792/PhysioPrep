@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import physioprep as pp
 
 ########################################################################################################################
-## -- tests for physioprep/mimic_iii_tk/module.py -- ###################################################################
+## -- tests for physioprep/mimic_iii_ms_tk/module.py -- ################################################################
 ########################################################################################################################
 
 ## -- tests for preset metadata data frame -- ##
@@ -167,7 +167,7 @@ def mock_obj():
   return obj
 
 def test_create_preset_lookup_sequential(mock_obj):
-  with patch("physioprep.mimic_iii_tk.utility.fetch_with_retry", side_effect = lambda f, *a, **k: f(*a, **k)):
+  with patch("physioprep.mimic_iii_ms_tk.utility.fetch_with_retry", side_effect = lambda f, *a, **k: f(*a, **k)):
     df = mock_obj.create_preset_lookup(patients = ['p1'], cores = None)
     assert not df.empty
     expected_cols = ['patient_group', 'patient_id', 'record', 'segment', 'certain', 'segment_len', 'signals']
@@ -175,14 +175,14 @@ def test_create_preset_lookup_sequential(mock_obj):
 
 def test_create_preset_lookup_with_save(mock_obj, tmp_path):
   save_file = tmp_path / "lookup.pkl"
-  with patch("physioprep.mimic_iii_tk.utility.fetch_with_retry", side_effect = lambda f, *a, **k: f(*a, **k)):
+  with patch("physioprep.mimic_iii_ms_tk.utility.fetch_with_retry", side_effect = lambda f, *a, **k: f(*a, **k)):
     df = mock_obj.create_preset_lookup(patients=['p1'], cores = 1, save_as = str(save_file))
     assert save_file.exists()
     expected_cols = ['patient_group', 'patient_id', 'record', 'segment', 'certain', 'segment_len', 'signals']
     assert all(col in df.columns for col in expected_cols)
 
 def test_create_preset_lookup_threaded(mock_obj):
-  with patch("physioprep.mimic_iii_tk.utility.fetch_with_retry", side_effect = lambda f, *a, **k: f(*a, **k)):
+  with patch("physioprep.mimic_iii_ms_tk.utility.fetch_with_retry", side_effect = lambda f, *a, **k: f(*a, **k)):
     df = mock_obj.create_preset_lookup(patients = ['p1', 'p2'], cores=2)
     assert not df.empty
     expected_cols = ['patient_group', 'patient_id', 'record', 'segment', 'certain', 'segment_len', 'signals']
@@ -190,7 +190,7 @@ def test_create_preset_lookup_threaded(mock_obj):
 
 def test_create_preset_lookup_empty_result(mock_obj):
   mock_obj.get_records = MagicMock(return_value=[])
-  with patch("physioprep.mimic_iii_tk.utility.fetch_with_retry", side_effect = lambda f, *a, **k: f(*a, **k)):
+  with patch("physioprep.mimic_iii_ms_tk.utility.fetch_with_retry", side_effect = lambda f, *a, **k: f(*a, **k)):
     df = mock_obj.create_preset_lookup(patients = ['p1'])
     assert df.empty
 

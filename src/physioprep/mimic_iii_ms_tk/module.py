@@ -36,7 +36,7 @@ class M3WaveFormMasterClass():
   
   ## -- get preset metadata -- ##
   def get_preset(self) -> pd.DataFrame:
-    with resources.open_binary("physioprep.mimic_iii_tk.data", "preset.pkl.gz") as file:
+    with resources.open_binary("physioprep.mimic_iii_ms_tk.data", "preset.pkl.gz") as file:
       preset_metadata = pd.read_pickle(file, compression = "gzip")
     return preset_metadata.reset_index(drop = True)
 
