@@ -202,25 +202,29 @@ class M3WaveFormMasterClass():
 
   ## -- selects a random batch from the data -- ##
   def get_data_batch(self, df: pd.DataFrame, batch_size: int, seq_len: int, 
-                     channels: list[str] | None = None, sample_res: int = 64,
-                     num_cores: int | None = None, timeout: int = 5) -> tuple[np.ndarray, list, list]:
+                    channels: list[str] | None = None, sample_res: int = 64,
+                    num_cores: int | None = None, timeout: int = 5) \
+                    -> tuple[np.ndarray, list, list, pd.DataFrame]:
 
     validator = M3WaveFormValidationModule()
 
     def process_row(_):
       for attempt in range(timeout):
-        row = df.sample(n = 1).iloc[0]
+        row = df.sample(n=1).iloc[0]
 
         header = self.get_patient_header(row["patient_group"], row["patient_id"], row["segment"])
         random_offset = np.random.randint(0, max(0, header.sig_len - seq_len) + 1)
         sampfrom, sampto = random_offset, random_offset + seq_len
 
-        masked_channels = np.array([False if sig in row["signals"] else True for sig in channels]).astype(bool)
+        masked_channels = np.array(
+          [False if sig in row["signals"] else True for sig in channels]
+        ).astype(bool)
         shared_channels = [sig for sig in channels if sig in row["signals"]]
 
         rec = self.get_patient_record(
           row["patient_group"], row["patient_id"], row["segment"],
-          sampfrom=sampfrom, sampto = sampto, sample_res = sample_res, channels = shared_channels
+          sampfrom = sampfrom, sampto = sampto, 
+          sample_res = sample_res, channels = shared_channels
         )
 
         waveform = rec.p_signal
@@ -230,26 +234,29 @@ class M3WaveFormMasterClass():
 
         existing_waveform = masked_waveform[~masked_channels, :]
         if validator.apply(existing_waveform):
-          return masked_waveform, shared_channels, masked_channels
+          return masked_waveform, shared_channels, masked_channels, row
 
       return None
 
     if num_cores is None or num_cores == 1:
       results = [process_row(None) for _ in range(batch_size)]
     else:
-      with ThreadPoolExecutor(max_workers = num_cores) as executor:
+      with ThreadPoolExecutor(max_workers=num_cores) as executor:
         results = list(executor.map(process_row, range(batch_size)))
 
-    final_batch, batch_channels_list, batch_masks_list = [], [], []
+    final_batch, batch_channels_list, batch_masks_list, batch_rows_list = [], [], [], []
     for r in results:
       if r is None:
         zeros_waveform = np.zeros((len(channels), seq_len))
         final_batch.append(zeros_waveform)
         batch_channels_list.append(channels)
         batch_masks_list.append(np.array([False]*len(channels)))
+        batch_rows_list.append(None)
       else:
         final_batch.append(r[0])
         batch_channels_list.append(r[1])
         batch_masks_list.append(r[2])
+        batch_rows_list.append(r[3])
 
-    return np.stack(final_batch), batch_channels_list, batch_masks_list
+    batch_rows_df = pd.DataFrame([row if row is not None else {} for row in batch_rows_list])
+    return np.stack(final_batch), batch_channels_list, batch_masks_list, batch_rows_df

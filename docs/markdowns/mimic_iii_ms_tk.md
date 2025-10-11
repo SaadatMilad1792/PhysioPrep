@@ -175,7 +175,7 @@ get_data_batch(df: pd.DataFrame, batch_size: int, seq_len: int, channels: list[s
 - num_cores: allows for multicore processing, if set to `None` falls back to single core.
 - timeout: maximum number of attempts before returning all zeros as fallback value.
 
-**Returns:** returns a np.array of shape `(batch_size, len(channels), seq_len)`, and two additional lists, one for masked entries, and one for available signals per entry in batch.
+**Returns:** returns a np.array of shape `(batch_size, len(channels), seq_len)`, and two additional lists, one for masked entries, and one for available signals per entry in batch. Most recent version also returns the sub-dataframe used to extract data in order for label retrieval from MIMIC - III.
 
 <!-- get subject split -->
 ### Methods &#x279C; get_subject_split

@@ -269,32 +269,28 @@ def test_get_patient_record():
 def module_and_df():
   module = pp.M3WaveFormMasterClass()
 
-  # select realistic patient data
   df = module.preset_metadata
   inp_channels, out_channels = ["II", "PLETH"], ["ABP"]
   df = module.get_patient_with_signal(
-    df, inp_channels=inp_channels, inp_type="any",
-    out_channels=out_channels, out_type="all", min_samples=20000
+    df, inp_channels = inp_channels, inp_type = "any",
+    out_channels = out_channels, out_type = "all", min_samples = 20000
   )
   return module, df, inp_channels + out_channels
 
 def test_get_data_batch_real(module_and_df):
   module, df, channels = module_and_df
-  batch_size, seq_len = 2, 500  # smaller for testing
+  batch_size, seq_len = 2, 500
 
-  batch, batch_channels, batch_masks = module.get_data_batch(
-    df, batch_size=batch_size, seq_len=seq_len, channels=channels, sample_res=32, num_cores=2, timeout=3
+  batch, batch_channels, batch_masks, sub_df = module.get_data_batch(
+    df, batch_size = batch_size, seq_len = seq_len, 
+    channels = channels, sample_res = 32, num_cores = 2, timeout = 3
   )
 
-  # check shapes
   assert batch.shape == (batch_size, len(channels), seq_len)
   assert len(batch_channels) == batch_size
   assert len(batch_masks) == batch_size
-
-  # ensure no NaNs
   assert not np.isnan(batch).any()
 
-  # ensure masks are boolean
   for mask in batch_masks:
     assert mask.dtype == bool
     assert mask.shape[0] == len(channels)
@@ -303,20 +299,17 @@ def test_get_data_batch_nan_fallback(module_and_df):
   module, df, channels = module_and_df
   batch_size, seq_len = 2, 300
 
-  # Monkeypatch get_patient_record to inject NaNs for first patient
   original_get_patient_record = module.get_patient_record
   def nan_record(*args, **kwargs):
     rec = original_get_patient_record(*args, **kwargs)
-    rec.p_signal[0, 0:10] = np.nan  # insert NaNs into first 10 samples of first channel
+    rec.p_signal[0, 0:10] = np.nan
     return rec
   module.get_patient_record = nan_record
 
-  batch, batch_channels, batch_masks = module.get_data_batch(
-    df, batch_size=batch_size, seq_len=seq_len, channels=channels, timeout=2
+  batch, batch_channels, batch_masks, sub_df = module.get_data_batch(
+    df, batch_size = batch_size, seq_len = seq_len, 
+    channels = channels, timeout = 2
   )
 
-  # batch should still have correct shape
   assert batch.shape == (batch_size, len(channels), seq_len)
-
-  # NaNs should be replaced with zeros
   assert not np.isnan(batch).any()
