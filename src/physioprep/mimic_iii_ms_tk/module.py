@@ -258,5 +258,8 @@ class M3WaveFormMasterClass():
         batch_masks_list.append(r[2])
         batch_rows_list.append(r[3])
 
-    batch_rows_df = pd.DataFrame([row if row is not None else {} for row in batch_rows_list])
+    batch_rows_df = pd.DataFrame([
+      row.to_dict() if isinstance(row, pd.Series) else {} 
+      for row in batch_rows_list
+    ])
     return np.stack(final_batch), batch_channels_list, batch_masks_list, batch_rows_df
