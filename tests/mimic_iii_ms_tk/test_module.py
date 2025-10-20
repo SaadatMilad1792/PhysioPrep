@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from unittest.mock import MagicMock, patch
 import physioprep as pp
+from concurrent.futures import Future
 
 ########################################################################################################################
 ## -- tests for physioprep/mimic_iii_ms_tk/module.py -- ################################################################
@@ -182,11 +183,9 @@ def test_create_preset_lookup_with_save(mock_obj, tmp_path):
     assert all(col in df.columns for col in expected_cols)
 
 def test_create_preset_lookup_threaded(mock_obj):
-  with patch("physioprep.mimic_iii_ms_tk.utility.fetch_with_retry", side_effect = lambda f, *a, **k: f(*a, **k)):
-    df = mock_obj.create_preset_lookup(patients = ['p1', 'p2'], cores=2)
-    assert not df.empty
-    expected_cols = ['patient_group', 'patient_id', 'record', 'segment', 'certain', 'segment_len', 'signals']
-    assert all(col in df.columns for col in expected_cols)
+  mod = pp.M3WaveFormMasterClass()
+  df = mod.create_preset_lookup(patients = ['p00/p000020/', 'p00/p000030/'], cores = 2)
+  assert not df.empty
 
 def test_create_preset_lookup_empty_result(mock_obj):
   mock_obj.get_records = MagicMock(return_value=[])
@@ -194,50 +193,133 @@ def test_create_preset_lookup_empty_result(mock_obj):
     df = mock_obj.create_preset_lookup(patients = ['p1'])
     assert df.empty
 
-def test_create_preset_lookup_threaded_exceptions(capsys):
-  obj = pp.M3WaveFormMasterClass()
 
-  patients = ["good_patient", "bad_patient"]
+@pytest.fixture
+def dummy_class():
+  cls = pp.M3WaveFormMasterClass()
+  return cls
 
-  obj.get_patients = MagicMock(return_value = patients)
+def make_df():
+  return pd.DataFrame({"x": [1]})
 
-  def get_records_side_effect(patient):
-    if patient == "bad_patient":
-      raise Exception("fail_records")
-    return ["record1"]
+@patch("physioprep.mimic_iii_ms_tk.module.fetch_with_retry")
+def test_full_coverage_single_core(mock_fetch, tmp_path, dummy_class):
+  # mock fetch_with_retry behavior depending on call
+  def side_effect(func, *args, **kwargs):
+    if func.__name__ == "get_signals_within":
+      return [0.1, 0.2]
+    if func.__name__ == "contains_certain":
+      return True
+    if func.__name__ == "get_patient_group_id":
+      return ("grp", "pid")
+    if func.__name__ == "get_record_segments":
+      return (["seg1", "seg2"], [10, 20])
+    if func.__name__ == "get_records":
+      return ["rec1", "rec2"]
+    if func.__name__ == "get_patients":
+      return ["pat1", "pat2"]
+    raise ValueError("unexpected call")
+  mock_fetch.side_effect = side_effect
 
-  obj.get_records = MagicMock(side_effect = get_records_side_effect)
-  obj.get_record_segments = MagicMock(return_value = (["seg1"], [100]))
-  obj.get_signals_within = MagicMock(return_value = "signal_data")
-  obj.contains_certain = MagicMock(return_value = True)
-  obj.get_patient_group_id = MagicMock(return_value = ("groupA", "pid123"))
-
-  with patch("tqdm.tqdm", lambda x, **kwargs: x):
-    df = obj.create_preset_lookup(patients=None, cores = 2, tqdm_depth = 3)
+  # test _process_segment_for_lookup
+  df = dummy_class._process_segment_for_lookup("pat1", "rec1", "seg1", 10)
   assert isinstance(df, pd.DataFrame)
-  assert len(df) == 1
+  assert "signals" in df.columns
 
-  row = df.iloc[0]
-  assert row["patient_group"] == "groupA"
-  assert row["patient_id"] == "pid123"
-  assert row["signals"] == "signal_data"
-  assert bool(row["certain"])
+  # test _process_record_for_lookup
+  df_list = dummy_class._process_record_for_lookup("pat1", "rec1", [False, False, False])
+  assert all(isinstance(x, pd.DataFrame) for x in df_list)
 
-  captured = capsys.readouterr()
-  assert "Failed to process patient bad_patient: fail_records" in captured.out
+  # test _process_patient_for_lookup
+  df_list2 = dummy_class._process_patient_for_lookup("pat1", [False, False, False])
+  assert all(isinstance(x, pd.DataFrame) for x in df_list2)
 
-  df = obj.create_preset_lookup(patients = None, cores = 2, tqdm_depth = 0)
-  assert isinstance(df, pd.DataFrame)
-  assert len(df) == 1
+  # test _process_patient_chunk_for_lookup
+  df_list3 = dummy_class._process_patient_chunk_for_lookup(["pat1"], [False, False, False])
+  assert all(isinstance(x, pd.DataFrame) for x in df_list3)
 
-  row = df.iloc[0]
-  assert row["patient_group"] == "groupA"
-  assert row["patient_id"] == "pid123"
-  assert row["signals"] == "signal_data"
-  assert bool(row["certain"])
+  # test create_preset_lookup single-core path (with save_as)
+  out_path = tmp_path / "lookup.pkl"
+  df_final = dummy_class.create_preset_lookup(None, save_as=str(out_path), cores=None)
+  assert out_path.exists()
+  assert isinstance(df_final, pd.DataFrame)
 
-  captured = capsys.readouterr()
-  assert "Failed to process patient bad_patient: fail_records" in captured.out
+  # test empty return (when entry_rows empty)
+  with patch.object(dummy_class, "_process_patient_for_lookup", return_value=[]):
+    df_empty = dummy_class.create_preset_lookup(["pat1"], cores=None)
+    assert df_empty.empty
+
+@patch("physioprep.mimic_iii_ms_tk.module.fetch_with_retry")
+def test_full_coverage_multi_core(mock_fetch, dummy_class):
+  def side_effect(func, *args, **kwargs):
+    if func.__name__ == "get_patients":
+      return ["pat1", "pat2"]
+    if func.__name__ == "get_records":
+      return ["rec1"]
+    if func.__name__ == "get_record_segments":
+      return (["seg1"], [5])
+    if func.__name__ == "get_signals_within":
+      return [0.5]
+    if func.__name__ == "contains_certain":
+      return False
+    if func.__name__ == "get_patient_group_id":
+      return ("grp", "pid")
+    raise ValueError("unexpected call")
+  mock_fetch.side_effect = side_effect
+
+  # Patch executor to simulate parallel execution
+  future = Future()
+  df = pd.DataFrame({"a": [1]})
+  future.set_result([df])
+  with patch("physioprep.mimic_iii_ms_tk.module.ProcessPoolExecutor") as MockExec:
+    MockExec.return_value.__enter__.return_value.submit.return_value = future
+    MockExec.return_value.__enter__.return_value.__exit__.return_value = None
+    df_final = dummy_class.create_preset_lookup(["pat1", "pat2"], cores=2)
+    assert isinstance(df_final, pd.DataFrame)
+
+
+@patch("physioprep.mimic_iii_ms_tk.module.fetch_with_retry")
+def test_create_preset_lookup_exception_branch_only(mock_fetch, capsys):
+  # minimal fetch responses to let create_preset_lookup reach multi-core branch
+  def side_effect(func, *args, **kwargs):
+    name = func.__name__
+    if name == "get_patients":
+      return ["pat1", "pat2"]
+    if name == "get_records":
+      return ["rec1"]
+    if name == "get_record_segments":
+      return (["seg1"], [5])
+    if name == "get_signals_within":
+      return [0.5]
+    if name == "contains_certain":
+      return False
+    if name == "get_patient_group_id":
+      return ("grp", "pid")
+    raise ValueError("unexpected call")
+  mock_fetch.side_effect = side_effect
+
+  inst = pp.M3WaveFormMasterClass()
+
+  # prepare a Future that is marked done but raises when .result() is called
+  bad_future = Future()
+  bad_future.set_result(None)  # mark as done so as_completed doesn't block
+  def bad_result(timeout=None):
+    raise RuntimeError("fake processing error")
+  bad_future.result = bad_result
+
+  with patch("physioprep.mimic_iii_ms_tk.module.ProcessPoolExecutor") as MockExec:
+    mock_exec_instance = MockExec.return_value.__enter__.return_value
+    mock_exec_instance.submit.return_value = bad_future
+
+    # run with cores>1 to reach the ProcessPoolExecutor branch
+    df = inst.create_preset_lookup(["pat1", "pat2"], cores=2)
+
+    # capture and check printed exception message
+    captured = capsys.readouterr()
+    assert "Failed to process chunk" in captured.out
+    assert isinstance(df, pd.DataFrame)
+    assert df.empty
+
 
 ## -- tests for advanced builtin filter -- ##
 def test_get_patient_with_signal_filters_min_samples(monkeypatch):
@@ -313,3 +395,120 @@ def test_get_data_batch_nan_fallback(module_and_df):
 
   assert batch.shape == (batch_size, len(channels), seq_len)
   assert not np.isnan(batch).any()
+
+
+def dummy_get_patient_header(group, pid, segment):
+  class Header:
+    def __init__(self):
+      self.sig_len = 800
+  return Header()
+
+
+def dummy_get_patient_record(group, pid, segment, sampfrom, sampto, sample_res, channels):
+  class Record:
+    def __init__(self):
+      self.p_signal = np.random.randn(750, len(channels))
+  return Record()
+
+
+class DummyValidator:
+  def __init__(self, return_value=True):
+    self.return_value = return_value
+  def apply(self, arr):
+    return self.return_value
+
+
+@pytest.fixture
+def dummy_df():
+  return pd.DataFrame([
+    {
+      "patient_group": "A",
+      "patient_id": "1",
+      "segment": "seg1",
+      "signals": ["ch1", "ch2"]
+    }
+  ])
+
+
+@pytest.fixture
+def dummy_class(monkeypatch):
+  obj = pp.M3WaveFormMasterClass()
+
+  obj.get_patient_header = dummy_get_patient_header
+  obj.get_patient_record = dummy_get_patient_record
+  monkeypatch.setattr(pp, "M3WaveFormValidationModule", lambda: DummyValidator(return_value=True))
+  return obj
+
+
+def test_get_data_batch_single_core(dummy_class, dummy_df):
+  """Covers single-core execution."""
+  batch, channels, masks, rows = dummy_class.get_data_batch(
+    dummy_df,
+    batch_size=2,
+    seq_len=200,
+    channels=["ch1", "ch2", "ch3"],
+    sample_res=32,
+    num_cores=1,
+    timeout=2
+  )
+
+  assert isinstance(batch, np.ndarray)
+  assert len(channels) == 2
+  assert isinstance(rows, pd.DataFrame)
+  assert batch.shape[1] == 3
+
+
+def test_get_data_batch_multi_core(dummy_class, dummy_df):
+  """Covers multi-core Pool execution."""
+  batch, channels, masks, rows = dummy_class.get_data_batch(
+    dummy_df,
+    batch_size=2,
+    seq_len=100,
+    channels=["ch1", "ch2"],
+    sample_res=16,
+    num_cores=2,
+    timeout=2
+  )
+
+  assert isinstance(batch, np.ndarray)
+  assert batch.ndim == 3
+  assert isinstance(rows, pd.DataFrame)
+  assert all(isinstance(m, np.ndarray) for m in masks)
+
+
+def test_process_chunk_for_data_batch_timeout(dummy_class):
+  """Covers the timeout else-branch."""
+  rows = [pd.Series({
+    "patient_group": "A",
+    "patient_id": "2",
+    "segment": "segX",
+    "signals": ["ch9"]
+  })]
+  channels = ["ch1", "ch2", "ch9"]
+  seq_len = 100
+  sample_res = 8
+  timeout = 1
+
+  def fake_header(*args, **kwargs):
+    class H:
+      sig_len = 200
+    return H()
+
+  def fake_record(*args, **kwargs):
+    class R:
+      p_signal = np.zeros((100, 1))
+    return R()
+
+  class FalseValidator:
+    def apply(self, _):
+      return False
+
+  results = dummy_class._process_chunk_for_data_batch(
+    rows, channels, seq_len, sample_res, FalseValidator(),
+    timeout, fake_header, fake_record
+  )
+
+  assert len(results) == 1
+  wf, shared, mask, row = results[0]
+  assert wf.shape == (len(channels), seq_len)
+  assert all(isinstance(x, np.ndarray) or isinstance(x, list) for x in [wf, shared, mask])

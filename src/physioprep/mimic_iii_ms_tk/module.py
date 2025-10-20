@@ -10,7 +10,8 @@ from .utility import *
 from .validation import *
 from tqdm.auto import tqdm
 from importlib import resources
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from multiprocessing import Pool
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 ########################################################################################################################
 ## -- mimic iii toolkit master class module -- #########################################################################
@@ -94,67 +95,75 @@ class M3WaveFormMasterClass():
     return list(header.sig_name)
   
   ## -- create the preset lookup table -- ##
-  def create_preset_lookup(self, patients: list[str] | None = None, save_as: str | None = None,
-                           tqdm_depth: int = 3, cores: int | None = None) -> pd.DataFrame:
+  def _process_segment_for_lookup(self, patient: str, record: str, segment: str, segment_len: int) -> pd.DataFrame:
+    signals = fetch_with_retry(self.get_signals_within, patient, segment)
+    certain = fetch_with_retry(self.contains_certain, patient, segment)
+    group, pid = fetch_with_retry(self.get_patient_group_id, patient)
+    return pd.DataFrame({
+      "patient_group": [str(group)],
+      "patient_id": [str(pid)],
+      "record": [str(record)],
+      "segment": [str(segment)],
+      "certain": [bool(certain)],
+      "segment_len": [int(segment_len)],
+      "signals": [signals],
+    })
 
-    patients, entry_rows = self.get_patients() if patients is None else patients, []
+  def _process_record_for_lookup(self, patient: str, record: str, tqdm_flag: list[bool]) -> list[pd.DataFrame]:
+    segments, seg_len = fetch_with_retry(self.get_record_segments, patient, record)
+    segment_dfs: list[pd.DataFrame] = []
+    iterable = zip(segments, seg_len)
+    if tqdm_flag[2]:
+      iterable = tqdm(list(iterable), desc=f"Segments (record {record})", leave=False)
+    for segment, segment_len in iterable:
+      segment_dfs.append(self._process_segment_for_lookup(patient, record, segment, segment_len))
+    return segment_dfs
+
+  def _process_patient_for_lookup(self, patient: str, tqdm_flag: list[bool]) -> list[pd.DataFrame]:
+    records = fetch_with_retry(self.get_records, patient)
+    patient_dfs: list[pd.DataFrame] = []
+    iterable = records
+    if tqdm_flag[1]:
+      iterable = tqdm(records, desc=f"Records (patient {patient})", leave=False)
+    for record in iterable:
+      patient_dfs.extend(self._process_record_for_lookup(patient, record, tqdm_flag))
+    return patient_dfs
+
+  def _process_patient_chunk_for_lookup(self, patient_chunk: list[str], tqdm_flag: list[bool]) -> list[pd.DataFrame]:
+    results: list[pd.DataFrame] = []
+    for patient in patient_chunk:
+      results.extend(self._process_patient_for_lookup(patient, tqdm_flag))
+    return results
+
+  def create_preset_lookup(self, patients: list[str] | None = None, save_as: str | None = None,
+                          tqdm_depth: int = 3, cores: int | None = None) -> pd.DataFrame:
+
+    patients = self.get_patients() if patients is None else patients
+    entry_rows: list[pd.DataFrame] = []
     tqdm_flag = [True if k < tqdm_depth else False for k in range(3)]
 
-    def process_segment(patient, record, segment, segment_len):
-      signals = fetch_with_retry(self.get_signals_within, patient, segment)
-      certain = fetch_with_retry(self.contains_certain, patient, segment)
-      group, pid = fetch_with_retry(self.get_patient_group_id, patient)
-      return pd.DataFrame({
-        "patient_group": [str(group)],
-        "patient_id": [str(pid)],
-        "record": [str(record)],
-        "segment": [str(segment)],
-        "certain": [bool(certain)],
-        "segment_len": [int(segment_len)],
-        "signals": [signals],
-      })
-
-    def process_record(patient, record):
-      segments, seg_len = fetch_with_retry(self.get_record_segments, patient, record)
-      segment_dfs = []
-      iterable = zip(segments, seg_len)
-      if tqdm_flag[2]:
-        iterable = tqdm(list(iterable), desc = f"Segments (record {record})", leave = False)
-      for segment, segment_len in iterable:
-        segment_dfs.append(process_segment(patient, record, segment, segment_len))
-      return segment_dfs
-
-    def process_patient(patient):
-      records = fetch_with_retry(self.get_records, patient)
-      patient_dfs = []
-      iterable = records
-      if tqdm_flag[1]:
-        iterable = tqdm(records, desc = f"Records (patient {patient})", leave = False)
-      for record in iterable:
-        patient_dfs.extend(process_record(patient, record))
-      return patient_dfs
+    def chunk_list(lst: list, n: int) -> list[list]:
+      k, m = divmod(len(lst), n)
+      return [lst[i*k + min(i, m):(i+1)*k + min(i+1, m)] for i in range(n)]
 
     if cores is None or cores <= 1:
       iterable = patients
       if tqdm_flag[0]:
-        iterable = tqdm(patients, desc = "Patients")
+        from tqdm.auto import tqdm
+        iterable = tqdm(patients, desc="Patients")
       for patient in iterable:
-        entry_rows.extend(process_patient(patient))
+        entry_rows.extend(self._process_patient_for_lookup(patient, tqdm_flag))
     else:
-      with ThreadPoolExecutor(max_workers=cores) as executor:
-        futures = {executor.submit(process_patient, patient): patient for patient in patients}
-        if tqdm_flag[0]:
-          for f in tqdm(as_completed(futures), total=len(futures), desc = "Patients"):
-            try:
-              entry_rows.extend(f.result())
-            except Exception as e:
-              print(f"Failed to process patient {futures[f]}: {e}")
-        else:
-          for f in as_completed(futures):
-            try:
-              entry_rows.extend(f.result())
-            except Exception as e:
-              print(f"Failed to process patient {futures[f]}: {e}")
+      patient_chunks = chunk_list(patients, cores)
+      with ProcessPoolExecutor(max_workers=cores) as executor:
+        futures = [
+          executor.submit(self._process_patient_chunk_for_lookup, chunk, tqdm_flag) for chunk in patient_chunks
+        ]
+        for f in as_completed(futures):
+          try:
+            entry_rows.extend(f.result())
+          except Exception as e:
+            print(f"Failed to process chunk: {e}")
 
     if entry_rows:
       df = pd.concat(entry_rows).reset_index(drop = True)
@@ -162,6 +171,7 @@ class M3WaveFormMasterClass():
         df.to_pickle(save_as)
       return df
     return pd.DataFrame()
+
 
   ## -- get patients that have the listed signals available -- ##
   def get_patient_with_signal(self, df: pd.DataFrame, inp_channels: list[str] | None = None,
@@ -174,8 +184,9 @@ class M3WaveFormMasterClass():
     return tmp_df
     
   ## -- get patient record as a dataset -- ##
-  def get_patient_record(self, group: str, pid: str, record_segment: str, sampfrom: int = 0, sampto: int | None = None, 
-                       sample_res: int = 64, channels: list[int] | None = None) -> wfdb.Record:
+  def get_patient_record(self, group: str, pid: str, record_segment: str, sampfrom: int = 0, 
+                         sampto: int | None = None, sample_res: int = 64, 
+                         channels: list[int] | None = None) -> wfdb.Record:
 
     df = self.preset_metadata.copy()
     available_channels = df[(df["patient_id"] == pid) & (df["segment"] == record_segment)].iloc[0]
@@ -191,7 +202,7 @@ class M3WaveFormMasterClass():
 
     unique_indices = [all_signals.index(ch) for ch in unique_channels]
     pn_dir = self.args["physionet_dir"] + group + "/" + pid
-    rec = wfdb.rdrecord(record_segment, pn_dir = pn_dir, sampfrom=sampfrom, 
+    rec = wfdb.rdrecord(record_segment, pn_dir = pn_dir, sampfrom = sampfrom, 
                         sampto = sampto, return_res = sample_res, channels = unique_indices)
 
     sig_map = {ch: rec.p_signal[:, i] for i, ch in enumerate(unique_channels)}
@@ -201,18 +212,12 @@ class M3WaveFormMasterClass():
     return rec
 
   ## -- selects a random batch from the data -- ##
-  def get_data_batch(self, df: pd.DataFrame, batch_size: int, seq_len: int, 
-                    channels: list[str] | None = None, sample_res: int = 64,
-                    num_cores: int | None = None, timeout: int = 5) \
-                    -> tuple[np.ndarray, list, list, pd.DataFrame]:
-
-    validator = M3WaveFormValidationModule()
-
-    def process_row(_):
+  def _process_chunk_for_data_batch(self, rows_chunk, channels, seq_len, sample_res, validator, 
+                                    timeout, get_patient_header, get_patient_record) -> list:
+    chunk_results = []
+    for row in rows_chunk:
       for attempt in range(timeout):
-        row = df.sample(n=1).iloc[0]
-
-        header = self.get_patient_header(row["patient_group"], row["patient_id"], row["segment"])
+        header = get_patient_header(row["patient_group"], row["patient_id"], row["segment"])
         random_offset = np.random.randint(0, max(0, header.sig_len - seq_len) + 1)
         sampfrom, sampto = random_offset, random_offset + seq_len
 
@@ -221,10 +226,10 @@ class M3WaveFormMasterClass():
         ).astype(bool)
         shared_channels = [sig for sig in channels if sig in row["signals"]]
 
-        rec = self.get_patient_record(
+        rec = get_patient_record(
           row["patient_group"], row["patient_id"], row["segment"],
-          sampfrom = sampfrom, sampto = sampto, 
-          sample_res = sample_res, channels = shared_channels
+          sampfrom=sampfrom, sampto=sampto, 
+          sample_res=sample_res, channels=shared_channels
         )
 
         waveform = rec.p_signal
@@ -234,29 +239,43 @@ class M3WaveFormMasterClass():
 
         existing_waveform = masked_waveform[~masked_channels, :]
         if validator.apply(existing_waveform):
-          return masked_waveform, shared_channels, masked_channels, row
+          chunk_results.append((masked_waveform, shared_channels, masked_channels, row))
+          break
+      else:
+        zeros_waveform = np.zeros((len(channels), seq_len))
+        chunk_results.append((zeros_waveform, channels, np.array([False]*len(channels)), row))
+    return chunk_results
 
-      return None
 
-    if num_cores is None or num_cores == 1:
-      results = [process_row(None) for _ in range(batch_size)]
+  def get_data_batch(self, df: pd.DataFrame, batch_size: int, seq_len: int, 
+                    channels: list[str] | None = None, sample_res: int = 64,
+                    num_cores: int | None = None, timeout: int = 5) \
+                    -> tuple[np.ndarray, list, list, pd.DataFrame]:
+
+    validator = M3WaveFormValidationModule()
+    rows_list = [df.sample(n=1).iloc[0] for _ in range(batch_size)]
+
+    if num_cores is None or num_cores <= 1:
+      results = self._process_chunk_for_data_batch(
+        rows_list, channels, seq_len, sample_res, validator, timeout,
+        self.get_patient_header, self.get_patient_record
+      )
     else:
-      with ThreadPoolExecutor(max_workers=num_cores) as executor:
-        results = list(executor.map(process_row, range(batch_size)))
+      chunks = [rows_list[i::num_cores] for i in range(num_cores)]
+      with Pool(processes = num_cores) as pool:
+        results_chunks = pool.starmap(
+          self._process_chunk_for_data_batch,
+          [(chunk, channels, seq_len, sample_res, validator, timeout,
+            self.get_patient_header, self.get_patient_record) for chunk in chunks]
+        )
+      results = [item for chunk in results_chunks for item in chunk]
 
     final_batch, batch_channels_list, batch_masks_list, batch_rows_list = [], [], [], []
     for r in results:
-      if r is None:
-        zeros_waveform = np.zeros((len(channels), seq_len))
-        final_batch.append(zeros_waveform)
-        batch_channels_list.append(channels)
-        batch_masks_list.append(np.array([False]*len(channels)))
-        batch_rows_list.append(None)
-      else:
-        final_batch.append(r[0])
-        batch_channels_list.append(r[1])
-        batch_masks_list.append(r[2])
-        batch_rows_list.append(r[3])
+      final_batch.append(r[0])
+      batch_channels_list.append(r[1])
+      batch_masks_list.append(r[2])
+      batch_rows_list.append(r[3])
 
     batch_rows_df = pd.DataFrame([
       row.to_dict() if isinstance(row, pd.Series) else {} 
