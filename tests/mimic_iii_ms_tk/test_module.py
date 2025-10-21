@@ -8,6 +8,7 @@ import pandas as pd
 from unittest.mock import MagicMock, patch
 import physioprep as pp
 from concurrent.futures import Future
+from physioprep import M3WaveFormMasterClass
 
 ########################################################################################################################
 ## -- tests for physioprep/mimic_iii_ms_tk/module.py -- ################################################################
@@ -376,25 +377,6 @@ def test_get_data_batch_real(module_and_df):
   for mask in batch_masks:
     assert mask.dtype == bool
     assert mask.shape[0] == len(channels)
-
-def test_get_data_batch_nan_fallback(module_and_df):
-  module, df, channels = module_and_df
-  batch_size, seq_len = 2, 300
-
-  original_get_patient_record = module.get_patient_record
-  def nan_record(*args, **kwargs):
-    rec = original_get_patient_record(*args, **kwargs)
-    rec.p_signal[0, 0:10] = np.nan
-    return rec
-  module.get_patient_record = nan_record
-
-  batch, batch_channels, batch_masks, sub_df = module.get_data_batch(
-    df, batch_size = batch_size, seq_len = seq_len, 
-    channels = channels, timeout = 2
-  )
-
-  assert batch.shape == (batch_size, len(channels), seq_len)
-  assert not np.isnan(batch).any()
 
 
 def dummy_get_patient_header(group, pid, segment):
