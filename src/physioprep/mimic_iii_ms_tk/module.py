@@ -212,10 +212,10 @@ class M3WaveFormMasterClass():
     return rec
 
   ## -- selects a random batch from the data -- ##
-  def _process_chunk_for_data_batch(self, rows_chunk, channels, seq_len, sample_res, validator, 
+  def _process_chunk_for_data_batch(self, rows_chunk, channels, seq_len, sample_res, validator,
                                     timeout, get_patient_header, get_patient_record) -> list:
     chunk_results = []
-    for row in rows_chunk:
+    for idx, row in rows_chunk:
       for attempt in range(timeout):
         header = get_patient_header(row["patient_group"], row["patient_id"], row["segment"])
         random_offset = np.random.randint(0, max(0, header.sig_len - seq_len) + 1)
@@ -228,7 +228,7 @@ class M3WaveFormMasterClass():
 
         rec = get_patient_record(
           row["patient_group"], row["patient_id"], row["segment"],
-          sampfrom=sampfrom, sampto=sampto, 
+          sampfrom=sampfrom, sampto=sampto,
           sample_res=sample_res, channels=shared_channels
         )
 
@@ -239,46 +239,49 @@ class M3WaveFormMasterClass():
 
         existing_waveform = masked_waveform[~masked_channels, :]
         if validator.apply(existing_waveform):
-          chunk_results.append((masked_waveform, shared_channels, masked_channels, row))
+          chunk_results.append((idx, masked_waveform, shared_channels, masked_channels, row))
           break
       else:
         zeros_waveform = np.zeros((len(channels), seq_len))
-        chunk_results.append((zeros_waveform, channels, np.array([False]*len(channels)), row))
+        chunk_results.append((idx, zeros_waveform, channels,
+                              np.array([False] * len(channels)), row))
     return chunk_results
 
 
-  def get_data_batch(self, df: pd.DataFrame, batch_size: int, seq_len: int, 
-                    channels: list[str] | None = None, sample_res: int = 64,
-                    num_cores: int | None = None, timeout: int = 5) \
-                    -> tuple[np.ndarray, list, list, pd.DataFrame]:
+  def get_data_batch(self, df: pd.DataFrame, batch_size: int, seq_len: int,
+                     channels: list[str] | None = None, sample_res: int = 64,
+                     num_cores: int | None = None, timeout: int = 5) \
+                     -> tuple[np.ndarray, list, list, pd.DataFrame]:
 
     validator = M3WaveFormValidationModule()
-    rows_list = [df.sample(n=1).iloc[0] for _ in range(batch_size)]
+
+    # Tag rows with their original order index for deterministic merging
+    sampled_rows = df.sample(n=batch_size, replace=True).reset_index(drop=True)
+    indexed_rows = list(enumerate(sampled_rows.to_dict(orient="records")))
 
     if num_cores is None or num_cores <= 1:
       results = self._process_chunk_for_data_batch(
-        rows_list, channels, seq_len, sample_res, validator, timeout,
+        indexed_rows, channels, seq_len, sample_res, validator, timeout,
         self.get_patient_header, self.get_patient_record
       )
     else:
-      chunks = [rows_list[i::num_cores] for i in range(num_cores)]
-      with Pool(processes = num_cores) as pool:
+      # Split indexed rows evenly to preserve contiguous segments
+      chunks = np.array_split(indexed_rows, num_cores)
+      with Pool(processes=num_cores) as pool:
         results_chunks = pool.starmap(
           self._process_chunk_for_data_batch,
-          [(chunk, channels, seq_len, sample_res, validator, timeout,
+          [(chunk.tolist(), channels, seq_len, sample_res, validator, timeout,
             self.get_patient_header, self.get_patient_record) for chunk in chunks]
         )
       results = [item for chunk in results_chunks for item in chunk]
 
-    final_batch, batch_channels_list, batch_masks_list, batch_rows_list = [], [], [], []
-    for r in results:
-      final_batch.append(r[0])
-      batch_channels_list.append(r[1])
-      batch_masks_list.append(r[2])
-      batch_rows_list.append(r[3])
+    # Sort by index to ensure correct ordering
+    results.sort(key=lambda x: x[0])
 
-    batch_rows_df = pd.DataFrame([
-      row.to_dict() if isinstance(row, pd.Series) else {} 
-      for row in batch_rows_list
-    ])
-    return np.stack(final_batch), batch_channels_list, batch_masks_list, batch_rows_df
+    # Unpack aligned results
+    final_batch = np.stack([r[1] for r in results])
+    batch_channels_list = [r[2] for r in results]
+    batch_masks_list = [r[3] for r in results]
+    batch_rows_df = pd.DataFrame([r[4] for r in results])
+
+    return final_batch, batch_channels_list, batch_masks_list, batch_rows_df
